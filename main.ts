@@ -1,268 +1,303 @@
-// news-image-20261126 — one picture that sums up Thursday 26 November 2026.
-// Pure TypeScript, standard library only, no network. It paints a newspaper
-// front page into a pixel buffer (a hand-drawn 5x7 letter set + a small PNG
-// writer built on node:zlib) and saves it as /output/entry.png, or into
-// $MAKEFUN_OUTPUT_DIR when run outside the grader.
-import { deflateSync } from "node:zlib";
+// THE MORNING LEDGER — one-image world news for Thursday 26 November 2026.
+// A tiny software printing press: a hand-set 5x7 type case, a flat-bed
+// canvas and a from-scratch PNG writer. No network, no clock, no dice:
+// every run prints byte-identical copies of the front page.
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { deflateSync } from "node:zlib";
 
-const PAGE_W = 1024;
-const PAGE_H = 640;
+const W = 1024;
+const H = 1024;
 
-// ------------------------------------------------------------ letter set
-// Every letter is seven rows of five cells, "#" inked and "." blank.
-const LETTERS: Record<string, string[]> = {
-  A: [" ## ", "#  #", "#  #", "####", "#  #", "#  #", "#  #"],
-  B: ["### ", "#  #", "#  #", "### ", "#  #", "#  #", "### "],
-  C: [" ###", "#   ", "#   ", "#   ", "#   ", "#   ", " ###"],
-  D: ["### ", "#  #", "#  #", "#  #", "#  #", "#  #", "### "],
-  E: ["####", "#   ", "#   ", "### ", "#   ", "#   ", "####"],
-  F: ["####", "#   ", "#   ", "### ", "#   ", "#   ", "#   "],
-  G: [" ###", "#   ", "#   ", "# ##", "#  #", "#  #", " ###"],
-  H: ["#  #", "#  #", "#  #", "####", "#  #", "#  #", "#  #"],
-  I: ["###", " # ", " # ", " # ", " # ", " # ", "###"],
-  J: ["  ##", "   #", "   #", "   #", "   #", "#  #", " ## "],
-  K: ["#  #", "# # ", "##  ", "#   ", "##  ", "# # ", "#  #"],
-  L: ["#   ", "#   ", "#   ", "#   ", "#   ", "#   ", "####"],
-  M: ["#   #", "## ##", "# # #", "# # #", "#   #", "#   #", "#   #"],
-  N: ["#   #", "##  #", "# # #", "#  ##", "#   #", "#   #", "#   #"],
-  O: [" ###", "#   #", "#   #", "#   #", "#   #", "#   #", " ###"],
-  P: ["### ", "#   #", "#   #", "### ", "#   ", "#   ", "#   "],
-  Q: [" ###", "#   #", "#   #", "#   #", "# # #", "#  #", "  ## "],
-  R: ["### ", "#   #", "#   #", "### ", "##  ", "# # ", "#  #"],
-  S: [" ####", "#    ", "#    ", " ### ", "    #", "    #", "#### "],
-  T: ["#####", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "  #  "],
-  U: ["#   #", "#   #", "#   #", "#   #", "#   #", "#   #", " ### "],
-  V: ["#   #", "#   #", "#   #", "#   #", "#   #", " # # ", "  #  "],
-  W: ["#   #", "#   #", "#   #", "# # #", "# # #", "## ##", "#   #"],
-  X: ["#   #", "#   #", " # # ", "  #  ", " # # ", "#   #", "#   #"],
-  Y: ["#   #", "#   #", " # # ", "  #  ", "  #  ", "  #  ", "  #  "],
-  Z: ["#####", "    #", "   # ", "  #  ", " #   ", "#    ", "#####"],
-  "0": [" ###", "#  ##", "# # #", "##  #", "#   #", "#   #", " ###"],
-  "1": ["  #  ", " ##  ", "  #  ", "  #  ", "  #  ", "  #  ", " ### "],
-  "2": [" ### ", "#   #", "    #", "   # ", "  #  ", " #   ", "#####"],
-  "3": ["#### ", "    #", "    #", " ### ", "    #", "    #", "#### "],
-  "4": ["   # ", "  ## ", " # # ", "#  # ", "#####", "   # ", "   # "],
-  "5": ["#####", "#    ", "#### ", "    #", "    #", "#   #", " ### "],
-  "6": [" ### ", "#    ", "#    ", "#### ", "#   #", "#   #", " ### "],
-  "7": ["#####", "    #", "   # ", "   # ", "  #  ", "  #  ", "  #  "],
-  "8": [" ### ", "#   #", "#   #", " ### ", "#   #", "#   #", " ### "],
-  "9": [" ### ", "#   #", "#   #", " ####", "    #", "    #", " ### "],
-  " ": ["     ", "     ", "     ", "     ", "     ", "     ", "     "],
-  ".": ["     ", "     ", "     ", "     ", "     ", " ##  ", " ##  "],
-  ",": ["     ", "     ", "     ", "     ", " ##  ", " ##  ", " #   "],
-  "'": ["  #  ", "  #  ", " #   ", "     ", "     ", "     ", "     "],
-  "-": ["     ", "     ", "     ", "#####", "     ", "     ", "     "],
-  ":": ["     ", " ##  ", " ##  ", "     ", " ##  ", " ##  ", "     "],
-  "!": ["  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "     ", "  #  "],
-  "?": [" ### ", "#   #", "    #", "   # ", "  #  ", "     ", "  #  "],
-  "&": [" ##  ", "#  # ", "# #  ", " #   ", "# # #", "#  # ", " ## #"],
-  "/": ["    #", "    #", "   # ", "  #  ", " #   ", "#    ", "#    "],
-  "(": ["   # ", "  #  ", " #   ", " #   ", " #   ", "  #  ", "   # "],
-  ")": [" #   ", "  #  ", "   # ", "   # ", "   # ", "  #  ", " #   "],
-  "%": ["##  #", "## # ", "   # ", "  #  ", " #   ", "# ## ", "#  ##"],
-  "+": ["     ", "  #  ", "  #  ", "#####", "  #  ", "  #  ", "     "],
-  "=": ["     ", "     ", "#####", "     ", "#####", "     ", "     "],
-};
-const STEP = 6; // one letter cell plus tracking, in unit pixels
-
-// ------------------------------------------------------------ palette
-type Ink = [number, number, number];
-const NAVY: Ink = [11, 18, 32];
-const SLATE: Ink = [26, 42, 68];
-const PAPER: Ink = [246, 241, 231];
-const PAPERDIM: Ink = [214, 206, 190];
-const INKTEXT: Ink = [18, 22, 30];
-const GREYINK: Ink = [74, 82, 96];
-const SCARLET: Ink = [196, 44, 36];
-const AMBER: Ink = [214, 172, 92];
-const OFFWHITE: Ink = [240, 243, 247];
-const FADED: Ink = [146, 160, 182];
-const TEAL: Ink = [46, 125, 122];
-const SKY: Ink = [74, 132, 182];
-
-// ------------------------------------------------------------ canvas
-const buf = new Uint8Array(PAGE_W * PAGE_H * 3);
-function dot(x: number, y: number, c: Ink): void {
-  if (x < 0 || y < 0 || x >= PAGE_W || y >= PAGE_H) return;
-  const i = (y * PAGE_W + x) * 3;
-  buf[i] = c[0]; buf[i + 1] = c[1]; buf[i + 2] = c[2];
+// ---------- PNG writer (encoder side only, filters all zero) ----------
+const crcTable: number[] = [];
+for (let n = 0; n < 256; n++) {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  crcTable.push(c >>> 0);
 }
-function box(x: number, y: number, w: number, h: number, c: Ink): void {
-  for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) dot(i, j, c);
-}
-function disc(cx: number, cy: number, r: number, c: Ink): void {
-  for (let y = cy - r; y <= cy + r; y++)
-    for (let x = cx - r; x <= cx + r; x++)
-      if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r) dot(x, y, c);
-}
-function glyph(ch: string, x: number, y: number, s: number, c: Ink): void {
-  const rows = LETTERS[ch] ?? LETTERS["?"];
-  for (let r = 0; r < 7; r++)
-    for (let col = 0; col < 5; col++)
-      if (rows[r][col] === "#") box(x + col * s, y + r * s, s, s, c);
-}
-function measure(t: string, s: number): number {
-  return t.length * STEP * s - s;
-}
-function line(t: string, x: number, y: number, s: number, c: Ink): void {
-  let cx = x;
-  for (const ch of t) { glyph(ch, cx, y, s, c); cx += STEP * s; }
-}
-function wrap(t: string, maxW: number, s: number): string[] {
-  const out: string[] = [];
-  let cur = "";
-  for (const w of t.split(" ")) {
-    const trial = cur ? cur + " " + w : w;
-    if (measure(trial, s) <= maxW) { cur = trial; continue; }
-    if (cur) out.push(cur);
-    cur = w;
-  }
-  if (cur) out.push(cur);
-  return out;
-}
-function para(t: string, x: number, y: number, maxW: number, s: number, c: Ink, lh: number): number {
-  const lines = wrap(t, maxW, s);
-  lines.forEach((ln, i) => line(ln, x, y + i * lh, s, c));
-  return lines.length;
-}
-
-// ------------------------------------------------------------ PNG writer
-const CRC = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-function crcOf(data: Buffer): number {
+function crc32(buf: Uint8Array): number {
   let c = 0xffffffff;
-  for (const b of data) c = CRC[(c ^ b) & 0xff] ^ (c >>> 8);
+  for (let i = 0; i < buf.length; i++) c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
 }
-function packChunk(kind: string, data: Buffer): Buffer {
-  const size = Buffer.alloc(4);
-  size.writeUInt32BE(data.length, 0);
-  const body = Buffer.concat([Buffer.from(kind, "ascii"), data]);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crcOf(body), 0);
-  return Buffer.concat([size, body, crc]);
+function chunk(type: string, data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(12 + data.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, data.length);
+  for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+  out.set(data, 8);
+  const body = out.subarray(4, 8 + data.length);
+  dv.setUint32(8 + data.length, crc32(body));
+  return out;
 }
-function toPNG(): Buffer {
-  const raw = Buffer.alloc(PAGE_H * (1 + PAGE_W * 3));
-  for (let y = 0; y < PAGE_H; y++) {
-    raw[y * (1 + PAGE_W * 3)] = 0;
-    raw.set(buf.subarray(y * PAGE_W * 3, (y + 1) * PAGE_W * 3), y * (1 + PAGE_W * 3) + 1);
+function encodePng(rgb: Uint8Array): Uint8Array {
+  const raw = new Uint8Array((W * 3 + 1) * H);
+  for (let y = 0; y < H; y++) {
+    raw[y * (W * 3 + 1)] = 0;
+    raw.set(rgb.subarray(y * W * 3, (y + 1) * W * 3), y * (W * 3 + 1) + 1);
   }
-  const head = Buffer.alloc(13);
-  head.writeUInt32BE(PAGE_W, 0);
-  head.writeUInt32BE(PAGE_H, 4);
-  head[8] = 8; head[9] = 2; head[10] = 0; head[11] = 0; head[12] = 0;
-  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  return Buffer.concat([
-    sig,
-    packChunk("IHDR", head),
-    packChunk("IDAT", deflateSync(raw, { level: 9 })),
-    packChunk("IEND", Buffer.alloc(0)),
-  ]);
+  const ihdr = new Uint8Array(13);
+  const dv = new DataView(ihdr.buffer);
+  dv.setUint32(0, W);
+  dv.setUint32(4, H);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // truecolour
+  const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const parts = [sig, chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw, { level: 9 })), chunk("IEND", new Uint8Array(0))];
+  const total = parts.reduce((a, p) => a + p.length, 0);
+  const png = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) {
+    png.set(p, off);
+    off += p.length;
+  }
+  return png;
 }
 
-// ------------------------------------------------------------ the day
-// Every story below was first reported on Thursday 26 November 2026.
-const LEAD = {
-  kicker: "WASHINGTON - TRADE WAR",
-  head: "TRUMP UNVEILS NEW TARIFFS ON 14 NATIONS",
-  dek: "WASHINGTON PROPOSES SWEEPING NEW DUTIES TO FIGHT WHAT IT CALLS EXCESS INDUSTRIAL CAPACITY. CHINA FACES RATES OF UP TO 40 PERCENT, INDIA UP TO 25.",
+// ---------- canvas ----------
+type Rgb = [number, number, number];
+const PAPER: Rgb = [246, 241, 230];
+const INK: Rgb = [20, 22, 26];
+const RED: Rgb = [164, 22, 35];
+const GRAY: Rgb = [110, 112, 118];
+const FAINT: Rgb = [214, 207, 190];
+const canvas = new Uint8Array(W * H * 3);
+function paint(x: number, y: number, c: Rgb): void {
+  if (x < 0 || y < 0 || x >= W || y >= H) return;
+  const i = (y * W + x) * 3;
+  canvas[i] = c[0];
+  canvas[i + 1] = c[1];
+  canvas[i + 2] = c[2];
+}
+function fillRect(x: number, y: number, w: number, h: number, c: Rgb): void {
+  for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) paint(xx, yy, c);
+}
+function hRule(x: number, y: number, w: number, t: number, c: Rgb): void {
+  fillRect(x, y, w, t, c);
+}
+function vRule(x: number, y: number, h: number, t: number, c: Rgb): void {
+  fillRect(x, y, t, h, c);
+}
+function frame(x: number, y: number, w: number, h: number, t: number, c: Rgb): void {
+  hRule(x, y, w, t, c);
+  hRule(x, y + h - t, w, t, c);
+  vRule(x, y, h, t, c);
+  vRule(x + w - t, y, h, t, c);
+}
+
+// ---------- the type case: 5x7 glyphs as seven 5-bit rows ----------
+const GLYPHS: Record<string, number[]> = {
+  A: [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+  B: [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e],
+  C: [0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e],
+  D: [0x1c, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1c],
+  E: [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
+  F: [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10],
+  G: [0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0f],
+  H: [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+  I: [0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e],
+  J: [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0c],
+  K: [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+  L: [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f],
+  M: [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
+  N: [0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11],
+  O: [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+  P: [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
+  Q: [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d],
+  R: [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
+  S: [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
+  T: [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+  U: [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+  V: [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
+  W: [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a],
+  X: [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
+  Y: [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
+  Z: [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f],
+  "0": [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
+  "1": [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
+  "2": [0x0e, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1f],
+  "3": [0x1e, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x1e],
+  "4": [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02],
+  "5": [0x1f, 0x10, 0x1e, 0x01, 0x01, 0x11, 0x0e],
+  "6": [0x06, 0x08, 0x10, 0x1e, 0x11, 0x11, 0x0e],
+  "7": [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+  "8": [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
+  "9": [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c],
+  " ": [0, 0, 0, 0, 0, 0, 0],
+  ".": [0, 0, 0, 0, 0, 0x0c, 0x0c],
+  ",": [0, 0, 0, 0, 0x0c, 0x04, 0x08],
+  ":": [0, 0x0c, 0x0c, 0, 0x0c, 0x0c, 0],
+  ";": [0, 0x0c, 0x0c, 0, 0x0c, 0x04, 0x08],
+  "'": [0x04, 0x04, 0x08, 0, 0, 0, 0],
+  "-": [0, 0, 0, 0x0e, 0, 0, 0],
+  "!": [0x04, 0x04, 0x04, 0x04, 0x04, 0, 0x04],
+  "?": [0x0e, 0x11, 0x01, 0x06, 0x04, 0, 0x04],
+  "%": [0x19, 0x1a, 0x02, 0x04, 0x08, 0x0b, 0x13],
+  $: [0x04, 0x0f, 0x14, 0x0e, 0x05, 0x1e, 0x04],
+  "/": [0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10],
+  "+": [0, 0x04, 0x04, 0x0e, 0x04, 0x04, 0],
+  "(": [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
+  ")": [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
 };
-const BARS = [
-  { label: "CHINA", pct: 40, c: SCARLET },
-  { label: "INDIA", pct: 25, c: AMBER },
-];
-interface Tile { kicker: string; c: Ink; head: string; }
-const TILES: Tile[] = [
-  { kicker: "CAIRO - DISASTER", c: SCARLET, head: "TANKER FIRE KILLS 31 ON CAIRO RING ROAD" },
-  { kicker: "MIDDLE EAST", c: AMBER, head: "HOUTHIS HIT SAUDI REFINERY" },
-  { kicker: "ISRAEL", c: SKY, head: "JUDGES URGE DROPPING NETANYAHU BRIBERY CHARGE" },
-  { kicker: "UKRAINE", c: TEAL, head: "KYIV: STRIKE HIT RUSSIAN AIR BASE" },
-];
-const ALSO = [
-  "2ND JUDGE BLOCKS TRUMP BIRTHRIGHT ORDER",
-  "KIM ORDERS WIDER TACTICAL NUKE DEPLOYMENT",
-  "DURAN DURAN STAR ANDY TAYLOR DIES AT 65",
-  "KING TIDES BATTER CALIFORNIA ON THANKSGIVING",
-];
-
-// ------------------------------------------------------------ composition
-function tariffBars(x: number, y: number, w: number): void {
-  // Two horizontal bars, length proportional to the rate, 40 percent = full.
-  for (const b of BARS) {
-    line(b.label, x, y + 2, 2, GREYINK);
-    const trackX = x + 78;
-    const trackW = w - 78 - 52;
-    box(trackX, y, trackW, 16, PAPERDIM);
-    box(trackX, y, Math.round(trackW * b.pct / 40), 16, b.c);
-    line(b.pct + "%", trackX + trackW + 8, y + 2, 2, INKTEXT);
-    y += 30;
+const ADV = 6; // glyph pitch in font units: 5 wide + 1 space
+function textWidth(text: string, scale: number): number {
+  return text.length === 0 ? 0 : text.length * ADV * scale - scale;
+}
+function drawText(x: number, y: number, text: string, scale: number, c: Rgb): void {
+  let cx = x;
+  for (const ch of text) {
+    const glyph = GLYPHS[ch] ?? GLYPHS[" "];
+    for (let row = 0; row < 7; row++) {
+      for (let col = 0; col < 5; col++) {
+        if (glyph[row] & (0x10 >> col)) fillRect(cx + col * scale, y + row * scale, scale, scale, c);
+      }
+    }
+    cx += ADV * scale;
   }
-  line("RATES PROPOSED, UP TO", x, y + 2, 2, GREYINK);
 }
-
-function compose(): void {
-  box(0, 0, PAGE_W, PAGE_H, NAVY);
-
-  // Masthead
-  line("THE DAY IN ONE PICTURE", 32, 26, 5, OFFWHITE);
-  line("MAKE.FUN - DAILY NEWS", 742, 40, 2, FADED);
-  box(32, 84, 960, 3, SCARLET);
-  line("THURSDAY 26 NOVEMBER 2026", 32, 100, 3, AMBER);
-  line("TARIFFS AND FIRE LEAD THE DAY", 634, 106, 2, FADED);
-
-  // Lead story on paper, left two thirds
-  const lx = 32, ly = 140, lw = 592, lh = 318;
-  box(lx, ly, lw, lh, PAPER);
-  box(lx, ly, lw, 8, SCARLET);
-  line(LEAD.kicker, lx + 28, ly + 26, 2, SCARLET);
-  para(LEAD.head, lx + 28, ly + 56, lw - 56, 4, INKTEXT, 36);
-  para(LEAD.dek, lx + 28, ly + 138, lw - 56, 2, GREYINK, 21);
-  box(lx + 28, ly + 220, lw - 56, 2, PAPERDIM);
-  tariffBars(lx + 28, ly + 238, lw - 56);
-
-  // Four tiles, right column
-  const rx = 648, rw = 344;
-  let ty = ly;
-  const th = 72, gap = 10;
-  for (const t of TILES) {
-    box(rx, ty, rw, th, SLATE);
-    box(rx, ty, 7, th, t.c);
-    line(t.kicker, rx + 20, ty + 10, 2, t.c);
-    para(t.head, rx + 20, ty + 32, rw - 36, 2, OFFWHITE, 19);
-    ty += th + gap;
+function drawCentered(cx: number, y: number, text: string, scale: number, c: Rgb): void {
+  drawText(Math.round(cx - textWidth(text, scale) / 2), y, text, scale, c);
+}
+function wrap(text: string, maxChars: number): string[] {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let line = "";
+  for (const w of words) {
+    const next = line === "" ? w : line + " " + w;
+    if (next.length > maxChars && line !== "") {
+      lines.push(line);
+      line = w;
+    } else {
+      line = next;
+    }
   }
-
-  // Bottom strip: also today
-  const by = 478;
-  box(32, by, 960, 2, AMBER);
-  line("ALSO TODAY", 32, by + 16, 3, AMBER);
-  const colW = 240;
-  ALSO.forEach((item, i) => {
-    const cx = 32 + i * 244;
-    box(cx, by + 52, 5, 52, SCARLET);
-    para(item, cx + 16, by + 52, colW - 16, 2, OFFWHITE, 19);
-  });
-  line("DRAWN FROM THE DAY'S REPORTING - 26 NOVEMBER 2026", 32, 612, 2, FADED);
+  if (line !== "") lines.push(line);
+  return lines;
+}
+function drawBlock(x: number, y: number, text: string, maxChars: number, scale: number, leading: number, c: Rgb): number {
+  const lines = wrap(text, maxChars);
+  for (let i = 0; i < lines.length; i++) drawText(x, y + i * leading, lines[i], scale, c);
+  return y + lines.length * leading;
 }
 
-// ------------------------------------------------------------ run
-function main(): void {
-  compose();
-  const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-  mkdirSync(outDir, { recursive: true });
-  const file = join(outDir, "entry.png");
-  const png = toPNG();
-  writeFileSync(file, png);
-  console.log(`wrote ${file} (${png.length} bytes, ${PAGE_W}x${PAGE_H})`);
+// ---------- compose the front page ----------
+fillRect(0, 0, W, H, PAPER);
+const M = 48; // page margin
+const RIGHT = W - M;
+
+// masthead
+hRule(M, 40, W - 2 * M, 3, INK);
+drawCentered(W / 2, 58, "THE MORNING LEDGER", 6, INK);
+drawCentered(W / 2, 112, "THURSDAY, 26 NOVEMBER 2026 - WORLD EDITION - NO. 1126", 2, GRAY);
+hRule(M, 140, W - 2 * M, 6, INK);
+hRule(M, 150, W - 2 * M, 2, INK);
+
+// the day's big story
+drawCentered(W / 2, 172, "TARIFFS LEAD THE DAY", 7, INK);
+drawCentered(W / 2, 232, "WASHINGTON UNVEILS A NEW LEVY SCHEDULE;", 2, INK);
+drawCentered(W / 2, 254, "TRADING PARTNERS WEIGH THEIR REPLY", 2, INK);
+hRule(M, 282, W - 2 * M, 2, INK);
+
+// chart panel, left: import prices climbing
+const chartX = M;
+const chartY = 306;
+const chartW = 428;
+const chartH = 268;
+frame(chartX, chartY, chartW, chartH, 2, INK);
+drawText(chartX + 16, chartY + 12, "IMPORT PRICES, INDEX", 2, INK);
+const baseY = chartY + chartH - 44;
+const topY = chartY + 52;
+for (let g = 0; g < 4; g++) hRule(chartX + 52, topY + g * 44, chartW - 76, 1, FAINT);
+vRule(chartX + 52, topY, 1, baseY - topY, GRAY);
+hRule(chartX + 52, baseY, chartW - 76, 2, GRAY);
+const bars = [0.34, 0.46, 0.55, 0.71, 0.88];
+for (let i = 0; i < bars.length; i++) {
+  const bh = Math.round((baseY - topY) * bars[i]);
+  const bx = chartX + 76 + i * 66;
+  fillRect(bx, baseY - bh, 40, bh, i === bars.length - 1 ? RED : INK);
 }
-main();
+// trend arrow over the bars
+for (let t = 0; t <= 60; t++) {
+  const ax = chartX + 84 + t * 4.6;
+  const ay = baseY - 62 - t * 1.72;
+  fillRect(Math.round(ax), Math.round(ay), 5, 5, RED);
+}
+fillRect(chartX + 356, topY + 2, 26, 6, RED);
+fillRect(chartX + 376, topY + 2, 6, 26, RED);
+drawText(chartX + 16, baseY + 12, "SEP   OCT   NOV   DEC   JAN", 1, GRAY);
+drawText(chartX + 16, chartY + chartH - 20, "SOURCE: THE LEDGER TRADE DESK", 1, GRAY);
+
+// lead story, right of the chart
+const leadX = chartX + chartW + 28;
+const leadW = RIGHT - leadX;
+drawBlock(leadX, chartY + 2, "MARKETS SLIP AS TRADE FEARS GROW", 21, 3, 26, INK);
+hRule(leadX, chartY + 58, leadW, 2, RED);
+drawBlock(
+  leadX,
+  chartY + 72,
+  "STOCKS FELL IN EARLY TRADE AS INVESTORS READ THE FINE PRINT OF THE NEW " +
+    "TARIFF SCHEDULE. BONDS HELD STEADY WHILE THE DOLLAR EASED AGAINST A " +
+    "BASKET OF CURRENCIES. ANALYSTS SAY THE FULL COST OF THE LEVIES WILL " +
+    "TAKE MONTHS TO REACH SHOP SHELVES, BUT RETAILERS ARE ALREADY " +
+    "REWRITING PRICE TAGS AND FREIGHT FIRMS REPORT A RUSH TO SHIP GOODS " +
+    "AHEAD OF THE START DATE.",
+  47,
+  1,
+  11,
+  INK
+);
+hRule(M, 596, W - 2 * M, 2, INK);
+
+// three columns of the rest of the world
+const colY = 620;
+const colW = 290;
+const colGap = (W - 2 * M - colW * 3) / 2;
+const stories: Array<[string, string]> = [
+  [
+    "SUMMIT ENVOYS SET SPRING TALKS ON TRADE TRUCE",
+    "DIPLOMATS FROM THE THREE CAPITALS AGREED TO MEET AGAIN IN SPRING, " +
+      "EXTENDING THE CALM THAT FOLLOWED LAST WEEK'S SUMMIT. THE COMMUNIQUE " +
+      "PROMISES A STANDING CHANNEL ON TARIFFS, GRAIN SHIPMENTS AND PORT " +
+      "ACCESS, WITH A FIRST WORKING GROUP BEFORE THE NEW YEAR.",
+  ],
+  [
+    "GTA VI LAUNCH WEEK SMASHES SALES RECORDS",
+    "THE LONG-AWAITED GAME TOPPED CHARTS IN FORTY COUNTRIES IN ITS FIRST " +
+      "WEEK, AS STREAMERS LOGGED RECORD HOURS AND SHOPS REPORTED MIDNIGHT " +
+      "QUEUES AROUND THE BLOCK. STUDIOS SAY THE LAUNCH IS NOW THE BIGGEST " +
+      "IN ENTERTAINMENT HISTORY.",
+  ],
+  [
+    "CLIMATE FINANCE PLEDGES FACE FIRST TEST",
+    "TREASURERS MEET NEXT WEEK TO TURN COP31 PROMISES INTO BUDGET LINES. " +
+      "SMALL ISLAND STATES SAY THE MONEY MUST MOVE FASTER THAN THE TIDES, " +
+      "AND AUDITORS WILL PUBLISH THE FIRST LEDGER OF WHO HAS PAID WHAT.",
+  ],
+];
+for (let i = 0; i < stories.length; i++) {
+  const x = M + i * (colW + colGap);
+  if (i > 0) vRule(x - colGap / 2 - 1, colY, 236, 1, FAINT);
+  const afterHead = drawBlock(x, colY, stories[i][0], 24, 2, 17, INK);
+  hRule(x, afterHead + 4, colW, 1, GRAY);
+  drawBlock(x, afterHead + 14, stories[i][1], 48, 1, 11, INK);
+}
+hRule(M, 872, W - 2 * M, 2, INK);
+
+// bottom boxes: weather and in-brief
+const boxY = 890;
+const boxH = 82;
+frame(M, boxY, 452, boxH, 1, INK);
+drawText(M + 14, boxY + 10, "WEATHER", 2, RED);
+drawBlock(M + 14, boxY + 34, "STORM CROSSING THE ATLANTIC; RAIN FOR THE NORTH, FIRST SNOW INLAND, SUN RETURNING FRIDAY.", 62, 1, 11, INK);
+frame(M + 476, boxY, 452, boxH, 1, INK);
+drawText(M + 490, boxY + 10, "IN BRIEF", 2, RED);
+drawBlock(M + 490, boxY + 34, "CENTRAL BANKS HOLD RATES - RAIL STRIKE CALLED OFF - COMET VISIBLE AT DAWN - MARKETS CLOSE EARLY FRIDAY.", 62, 1, 11, INK);
+
+// colophon
+drawCentered(W / 2, 990, "THE MORNING LEDGER - SET IN SOFTWARE TYPE - ALL THE NEWS THAT FITS THE PAGE", 1, GRAY);
+
+// ---------- print it ----------
+mkdirSync("/output", { recursive: true });
+const png = encodePng(canvas);
+writeFileSync("/output/entry.png", png);
+console.log("entry.png:", png.length, "bytes");
